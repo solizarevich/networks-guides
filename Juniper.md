@@ -545,7 +545,7 @@ interface Port-channel1
 ```
 ---
 
-﻿### Network Time Protocol
+﻿###Network Time Protocol
 
 • Протокол NTP используется для синхронизации часов сетевых устройств с точным источником времени
 • NTP использует иерархическую сеть
@@ -1583,6 +1583,7 @@ saving package file in /var/sw/pkg ...
 • Функция отключается настройкой set system ports console insecure
 
 ---
+
 
 
 
