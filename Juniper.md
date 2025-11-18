@@ -1583,6 +1583,236 @@ saving package file in /var/sw/pkg ...
 
 ---
 
+﻿### Системное логирование (syslog)
+
+• Для журналирования общесистемных операций, таких как падение/поднятие интерфейсов или вход пользователей на устройство, используется UNIX syslog-style механизм
+
+* Файлы журналов хранятся в директории /var/log/
+* Основной syslog-файл - /var/log/messages
+* Можно отправлять сообщения на сервер Syslog
+
+• Junos OS хранит категорию (Facility) и уровень важности (Severity)
+
+
+***Пример настройки syslog***
+
+• Syslog настраивается на уровне иерархии [edit system syslog]
+
+```
+root@NetEdu# show system syslog
+archive size 100k files 3;
+user * {
+    any emergency;
+}
+host 10.254.0.5 {
+    any notice;
+    authorization info;
+}
+file messages {
+    any any;
+    explicit-priority;
+}
+file interactive-commands {
+    interactive-commands any;
+}
+file config-changes {
+    change-log info;
+}
+console {
+    any emergency;
+}
+```
+
+Это конфиг JunOS внутри блока `system syslog`, то есть настройка того, какие логи куда отправлять.
+
+Начнём разбор строки за строкой.
+
+```
+archive size 100k files 3;
+```
+
+Это настройка архивирования логов.
+Говорит: храни по 100 килобайт и до трёх файлов архива. Когда один переполняется, создаётся следующий. Типичная ротация.
+
+```
+user * {
+    any emergency;
+}
+```
+
+Это про отправку сообщений пользователям, залогиненным на устройство (например, через консоль или SSH).
+`user *` означает всем пользователям.
+`any emergency` значит присылать сообщения уровня *emergency* из всех facility. Это максимально критичные ошибки, уровня "всё сломалось", чтобы прям мигом увидели.
+
+```
+host 10.254.0.5 {
+    any notice;
+    authorization info;
+}
+```
+
+Отправка логов на внешний syslog-сервер по адресу 10.254.0.5.
+• `any notice` значит отправлять все facility, начиная с уровня notice и выше (warning, error и так далее).
+• `authorization info` отдельно отправляет логи авторизации на уровне info.
+
+Это типично, когда внешний сервер нужен для аудита логинов.
+
+```
+file messages {
+    any any;
+    explicit-priority;
+}
+```
+
+Это локальный файл /var/log/messages.
+• `any any` означает: писать туда абсолютно все facility и все уровни.
+• `explicit-priority` добавляет уровень важности в сам текст строки, чтобы в логе было видно severity.
+
+```
+file interactive-commands {
+    interactive-commands any;
+}
+```
+
+Логи интерактивных команд (то, что кто-то вводит в CLI руками).
+Складываются в файл `/var/log/interactive-commands`.
+`interactive-commands any` значит фиксировать все команды, неважно какие.
+
+Очень полезно для аудита.
+
+```
+file config-changes {
+    change-log info;
+}
+```
+
+Логи изменений конфигурации.
+Записывает изменения уровня info в файл `/var/log/config-changes`.
+То есть любое commit, кто что поменял и когда.
+
+```
+console {
+    any emergency;
+}
+```
+
+Вывод на физическую консоль устройства.
+Показывает только `emergency` сообщения, чтобы не засорять консоль тоннами обычных логов.
+
+
+***Интерпретация кодов сообщений***
+
+• С помощью команды help syslog message code можно получить полное описание кодов сообщений.
+
+```
+root@NetEdu> help syslog UI_LOGOUT_EVENT
+Name:        UI_LOGOUT_EVENT
+Message:     User '<username>' logout
+Help:        User ended CLI session
+Description: The indicated user exited from a Junos OS CLI session.
+Type:        Event: This message reports an event, not an error
+Severity:    info
+Facility:    ANY
+```
+
+```
+root@NetEdu> help syslog UI_CMDLINE_READ_LINE
+Name:        UI_CMDLINE_READ_LINE
+Message:     User '<username>', command '<command>'
+Help:        User entered command at CLI prompt
+Description: The indicated user typed the indicated command at the CLI prompt
+             and pressed the Enter key, sending the command string to the
+             management process (mgd).
+Type:        Event: This message reports an event, not an error
+Severity:    info
+Facility:    LOG_AUTH
+```
+
+
+***Tracing***
+
+• Трассировка это debug в терминологии других вендоров
+• При включении трассировки через конфигурацию создается файл, в котором хранится декодированная информация, отправленная или полученная движком маршрутизации
+– Результаты трассировки хранятся в файлах в директории /var/log/ или могут быть отправлены на удаленный сервер.
+• Конфигурация удаленного сервера производится на уровне иерархии [edit system tracing]
+
+```
+[edit]
+root@NetEdu# show system tracing
+destination-override syslog host 10.254.0.5;
+```
+***Пример настройки трассировки***
+
+• Трассировка может производиться на различных уровнях иерархии
+– [edit protocols protocol-name] для отслеживания работы протокола
+– [edit interfaces interface-name] для отслеживания работы интерфейса и т. п.
+
+```
+[edit protocols ospf]
+root@NetEdu# show
+traceoptions {
+    file ospf-trace size 128k files 5 no-world-readable;
+    flag event detail;
+    flag hello detail;
+    flag error detail;
+}
+```
+
+***Просмотр Log и Trace файлов***
+
+• Команда show log <filename> покажет содержимое файла.
+– Используйте pipe (|) для фильтрации вывода
+
+```
+root@NetEdu> show log messages | match "login attempt"
+Nov 12 10:32:46  NetEdu login: %AUTH-5: Login attempt for user admin from host [unknown]
+Nov 12 13:40:33  NetEdu login: %AUTH-5: Login attempt for user admin from host [unknown]
+```
+
+• Использование нескольких pipe вызывает логическое «И»
+
+```
+root@NetEdu> show log messages | match "Nov 12" | match "logout"
+Nov 12 10:33:50 NetEdu mgd[1603]: %INTERACT-5-UI_DBASE_LOGOUT_EVENT: User 'admin' exiting configuration mode
+Nov 12 13:40:20 NetEdu mgd[1603]: %INTERACT-6-UI_LOGOUT_EVENT: User 'admin' logout
+```
+
+• Заключение нескольких pipe в кавычки вызывает логическое «ИЛИ»
+
+```
+root@NetEdu> show log messages | match "login|logout"
+Nov 12 10:32:46 NetEdu login: %AUTH-5: Login attempt for user admin from host [unknown]
+Nov 12 10:33:01 NetEdu mgd[1603]: %INTERACT-5-UI_DBASE_LOGIN_EVENT: User 'admin' entering configuration mode
+Nov 12 10:33:50 NetEdu mgd[1603]: %INTERACT-5-UI_DBASE_LOGOUT_EVENT: User 'admin' exiting configuration mode
+```
+
+***Мониторинг Log и Trace файлов***
+
+• Команда monitor start <filename> осуществляет мониторинг файлов в реальном времени.
+– Можно мониторить несколько файлов одновременно.
+– Используйте pipe для фильтрации вывода
+– Комбинация Esc+Q приостанавливает мониторинг и восстанавливает вывод информации на экран.
+– Команда monitor stop останавливает мониторинг
+
+```
+root@NetEdu> monitor start messages
+
+root@NetEdu>
+*** messages ***
+Nov 12 14:19:31 NetEdu mgd[2073]: %INTERACT-6-UI_CMDLINE_READ_LINE: User 'root', command 'monitor start messages'
+Nov 12 14:20:00 NetEdu cron[2113]: %CRON-6: (root) CMD (/usr/libexec/atrun)
+```
+***Манипуляции с файлами***
+
+• Команда clear log <filename> удаляет содержимое trace и log файлов
+• Команда file delete <filename> удалит указанный файл
+
+---
+
+
+
+
+
 
 
 
