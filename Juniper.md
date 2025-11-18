@@ -2372,6 +2372,1000 @@ inet.0: 12 destinations, 12 routes (12 active, 0 holddown, 0 hidden)
 
 ---
 
+﻿### Базовые концепции
+
+• Политики маршрутизации управляют распространением маршрутов
+• Могут применяться к маршрутной информации:
+ – импортируемой в таблицу маршрутизации (import policy)
+ – экспортируемой из таблицы маршрутизации (export policy)
+
+
+***Политики маршрутизации по умолчанию***
+
+• Политики маршрутизации по умолчанию для протоколов:
+
+Протокол        | Import policy                                            | Export policy
+BGP             | Принимает все маршруты от соседей                        | Анонсирует все активные BGP маршруты
+OSPF / IS-IS    | Принимает все маршруты из SPF (политику нельзя изменить) | Отклоняет все маршруты, т.к. распространяет LSA, а не маршруты из RIB
+RIP / RIPng     | Принимает все маршруты от явно настроенных соседей       | Отклоняет все маршруты, требуется настройка политики
+Direct / Static | Принимает все маршруты                                   | (псевдопротоколы, политика экспорта отсутствует)
+
+***Структура политики маршрутизации***
+
+NetEdu-policy   
+
+   term T1         
+ From → Then 
+   (match)        
+no match
+
+   term T2
+ From → Then 
+   (match)
+no match
+
+   term T3
+  From → Then 
+    (match)
+
+• NetEdu-policy и term T1 задаваемые пользователем имена политики и элементов политики
+• From задает критерии для совпадения
+• Then описывает действия над маршрутами при совпадении
+
+
+***Критерии выбора маршрутов***
+
+• Политики маршрутизации позволяют отбирать маршруты на основе:
+– свойств префикса
+– протокола маршрутизации и его атрибутов
+– информации о next-hop и т.п.
+
+Фрагмент CLI:
+
+[edit policy-options policy-statement NetEdu-policy]
+admin@NetEdu# set from ?
+
+Possible completions:
+aggregate-contributor — Match more specifics of an aggregate
+apply-groups — Groups from which to inherit configuration data
+apply-groups-except — Don’t inherit configuration data from these groups
+area — OSPF area identifier
+as-path — Name of AS path regular expression (BGP only)
+as-path-group — Name of AS path group (BGP only)
+color — Color (preference) value
+color2 — Color (preference) value 2
+community — BGP community
+community-count — Number of BGP communities
+condition — Condition to match on
+external — External route
+family — Routing protocol instance
+instance — Routing protocol instance
+interface — Interface name or address
+level — IS-IS level
+local-preference — Local preference associated with a route
+metric — Metric value
+metric2 — Metric value 2
+metric3 — Metric value 3
+metric4 — Metric value 4
+multicast-scope — Multicast scope to match
+neighbor — Neighboring router
+next-hop — Next-hop router
+next-hop-type — Next-hop type
+origin — BGP origin attribute
+policy — Name of policy to evaluate
+preference — Preference value
+preference2 — Preference value 2
+prefix-list — List of prefix-lists of routes to match
+prefix-list-filter — List of prefix-list-filters to match
+protocol — Protocol from which route was learned
+rib — Routing table
+route-filter — List of routes to match
+route-type — Route type
+source-address-filter — List of source addresses to match
+state — Route state
+tag — Tag string
+tag2 — Tag string 2
+
+Когда пишешь routing policy (особенно на JunOS), блок **from** в каждом term это просто фильтр: какие маршруты подпадают под этот «правилец». И вот среди всех доступных критериев реально часто используются только некоторые, остальные живут глубоко в дебрях экзотики.
+
+Вот самые частые и полезные:
+
+**prefix-list / route-filter**
+Это короли матчей. Через них определяют, какие сети вообще рассматриваем: конкретный префикс, маска, диапазон масок.
+Например: «впускай только 10.0.0.0/8 со всеми подобными».
+
+**protocol**
+Используется когда нужно различать, откуда маршрут: BGP, OSPF, static, direct.
+Типичный кейс: «в BGP не бери OSPF-локальные маршруты» или «пропускаем дальше только BGP».
+
+**neighbor**
+Мега-удобно, когда политика зависит от того, какой именно сосед прислал маршрут.
+Чаще всего в BGP: разные фильтры для разных пиров.
+
+**as-path / as-path-group**
+Используется только в BGP. Позволяет делать фильтрацию по регуляркам AS-пути.
+Очень удобно для:
+– блокировки нежелательных транзитов
+– выбора peering vs transit
+– упрощённого контроля маршрутов с разных направлений
+
+**community / community-count**
+Ещё одна BGP-классика.
+Через community люди передают кучу полезных сигналов: тип префикса, приоритет, политика обработки.
+А community-count иногда используют, чтобы отличать агрегаты и очень большие пути.
+
+**metric / local-preference / preference**
+Это матч по метрикам. Используются когда решается:
+– какой маршрут предпочтительнее
+– какое правило применяется в ML or TE-сценариях.
+Metric в IGP-шках, local-preference только в BGP.
+
+**next-hop / next-hop-type**
+Полезно, если маршруты нужно отбирать по тому, куда они указывают. Например:
+– «не принимай маршруты, указывающие на loopback соседа»
+– «используй только те маршруты, чей next-hop — конкретный IP»
+
+**origin**
+Тоже чисто BGP-шная штука. Иногда нужна для фильтрации eBGP/iBGP нюансов.
+
+**instance / family**
+Используется когда у девайса несколько инстансов маршрутизации, VRF-ы, MPLS, inet6, inet.
+Без этого в сервис-провайдерских сетях никуда.
+
+Теперь про то, что почти не трогают (но знать приятно):
+
+**color / color2**
+Чаще встречается в контексте Segment Routing или policy-based routing, но в «классике» почти не нужно.
+
+**source-address-filter**
+Используется редко, в специфичных сценариях source-based routing.
+
+**multicast-scope**
+Если ты не мультикаст-гуру, ты его не увидишь и не потрогаешь.
+
+**route-type / state / external**
+Это тонкая настройка поведения, чаще нужна в больших, душных сетях SP.
+
+**level / area**
+Это матч для IS-IS и OSPF. Полезно, но локально и только в IGP-политиках.
+
+Если собрать всё в кучу простым языком:
+
+– Рабочие лошадки: prefix-list, route-filter, protocol, neighbor, as-path, community.
+– Атрибутные фильтры: metric, local-pref, next-hop.
+– Редкие и нишевые: multicast-scope, color, source-address-filter, state и прочие.
+
+***Route-filter***
+
+• Route-filter — способ фильтрации префиксов, настраиваемый внутри одного элемента политики
+– Неименованная сущность, не может быть использован повторно
+
+[edit]
+admin@NetEdu# show policy-options policy-statement NetEDU-policy3
+term reject_routes {
+from {
+route-filter 10.10.22.0/24 orlonger;
+route-filter 10.10.122.0/24 longer;
+route-filter 10.10.222.0/24 exact;
+}
+then reject;
+}
+
+***Prefix-list***
+
+• Prefix-list — именованный список префиксов
+– Используется для выбора маршрутов на основе префиксов
+– Также можно использовать в firewall-фильтрах
+
+• Настраивается на уровне иерархии [edit policy-options prefix-list]
+
+admin@NetEdu> show configuration policy-options
+prefix-list Net_prefixes {
+10.10.22.0/24;
+10.10.122.0/24;
+10.10.222.0/24;
+}
+
+policy-statement NetEdu-policy1 {
+from {
+prefix-list Net_prefixes;
+}
+then reject;
+}
+
+policy-statement NetEdu-policy2 {
+from {
+prefix-list-filter Net_prefixes orlonger;
+}
+then reject;
+}
+
+Сравним **route-filter** и **prefix-list** на JunOS человеческим языком.
+
+###  Что такое route-filter
+
+Route-filter это маленький «одноразовый фильтр», который живёт **внутри term'а**.
+Он не имеет имени, его нельзя переиспользовать в другой политике или в другом term'е.
+
+Это просто правило:
+«Сопоставь вот такой префикс с такой маской и вот таким типом совпадения».
+
+Примеры типов совпадения:
+– exact
+– longer
+– orlonger
+– upto / prefix-length-range
+(зависит от версии JunOS)
+
+И ты можешь записать сразу несколько route-filter подряд, чтобы получилось kind of мини-табличка совпадений.
+
+Плюсы:
+• Очень удобно, когда фильтр нужен только здесь и сейчас.
+• Суперчитаемо: прямо внутри политики видно, что происходит.
+• Не нужно создавать отдельный объект.
+
+Минусы:
+• Ты не можешь его переиспользовать.
+• Если такой же фильтр нужен в другой политике — придется копировать руками.
+• Не подходит для больших списков префиксов.
+
+### Что такое prefix-list
+
+Prefix-list это **именованный объект**.
+То есть ты создаешь его один раз в policy-options:
+
+```
+set policy-options prefix-list MY-PREFIXES 10.10.0.0/16
+set policy-options prefix-list MY-PREFIXES 192.168.1.0/24
+```
+А потом просто используешь:
+```
+from {
+    prefix-list MY-PREFIXES;
+}
+```
+Плюсы prefix-list:
+• Можно переиспользовать хоть в 20 политиках.
+• Очень удобно при больших наборах префиксов (десятки, сотни).
+• Видно и логически понятно: список — отдельно, политика — отдельно.
+• Легко обновлять: меняешь в одном месте, сразу обновляются все политики.
+
+Минусы prefix-list:
+• Чуть менее гибкий, чем route-filter, потому что сам prefix-list не хранит тип совпадения (exact / longer и т.д.).
+Тип совпадения задается уже в политике (prefix-list filter).
+• Нужно создавать отдельный объект — иногда это кажется «лишним движением».
+
+#### Простое правило выбора (как это делают сетевики)
+
+Если фильтр маленький и живет только в этой политике — **route-filter**.
+
+Если фильтр должен повторяться или содержит кучу префиксов — **prefix-list**.
+
+*И чуть «из практики», по-человечески*
+
+Route-filter — это как быстро порезать овощи на доске прямо над кастрюлей.
+Prefix-list — это как заранее подготовить контейнер с нарезанными овощами, чтобы использовать в разных блюдах.
+
+***Что значит orlonger / longer / exact в живых примерах***
+
+Представь, что у тебя есть базовый префикс, скажем:
+
+10.10.22.0/24
+
+И ты хочешь понять, какие маршруты будут матчиться в зависимости от модификаторов **exact**, **longer** и **orlonger**.
+
+Я разложу их так, чтобы интуитивно стало ясно.
+
+ **1. exact**
+
+Это «совпадение один в один».
+
+Если ты пишешь:
+
+```
+route-filter 10.10.22.0/24 exact;
+```
+То совпадут **только** маршруты:
+
+* 10.10.22.0/24
+
+И ВСЁ.
+Ни 10.10.22.0/25, ни 10.10.22.128/25, ни 10.10.22.0/26 уже не пройдут.
+
+Коротко:
+**exact = именно этот префикс, без вариантов.**
+
+**2. longer**
+
+Это «все, что длиннее по маске, но при этом строго потомки префикса».
+
+Если пишешь:
+
+```
+route-filter 10.10.22.0/24 longer;
+```
+
+То совпадут:
+
+* 10.10.22.0/25
+* 10.10.22.128/25
+* 10.10.22.0/26
+* 10.10.22.64/26
+* и так далее…
+
+Но НЕ совпадут:
+
+* 10.10.22.0/24 (потому что оно не длиннее)
+* 10.10.23.0/24 (не входит)
+* 10.10.0.0/16 (маска короче)
+
+Короче:
+**longer = только дочерние, более специфичные маршруты, но не сам базовый префикс.**
+
+**3. orlonger**
+
+Это «сам префикс И всё, что длиннее».
+
+То есть сочетание exact + longer.
+
+```
+route-filter 10.10.22.0/24 orlonger;
+```
+
+Совпадут:
+
+* 10.10.22.0/24 (сам префикс)
+* 10.10.22.0/25
+* 10.10.22.128/25
+* 10.10.22.0/26
+* и так далее…
+
+Но НЕ совпадут:
+
+* 10.10.23.0/24 (другой префикс)
+* 10.10.22.0/23 (маска короче)
+
+Коротко:
+orlonger = базовый префикс + все дочерние, более длинные.
+
+ ***Чтобы закрепить — живой пример из реальных сетей***
+
+ Тебе нужно заблокировать только конкретную сеть клиента
+
+Берешь:
+
+```
+exact
+```
+Нужно заблокировать ВСЕ подсети ниже агрегата (например, кто-то анонсит слишком детализированные префиксы)
+
+Берешь:
+
+```
+longer
+```
+
+ Нужно принять и агрегат, и все его сабнеты (классика для фильтрации по частям префикса)
+
+Берешь:
+
+```
+orlonger
+```
+
+### Действия над маршрутами
+
+• Основные действия политики маршрутизации над маршрутами:
+
+– Терминирующие действия — при соответствии маршрута критериям прекращают обработку политики, принимают или отбрасывают маршрут
+• Accept
+• Reject
+
+– Контроль выполнения политики маршрутизации — используются для создания цепочки политик маршрутизации
+• Next term
+• Next policy
+
+– Модификация атрибутов маршрута
+• Preference
+• Community
+• и т.д.
+
+
+
+**next term** и **next policy** это как раз те штуки, которые сначала звучат одинаково, но работают совсем по-разному. 
+
+Представь: Routing policy — это список правил
+
+Каждый **term** в policy это как мини-фильтр:
+
+1. from — что матчим
+2. then — что делаем
+
+Идёт проверка сверху вниз, как в firewall-фильтре.
+
+И вот, что важно:
+**не все действия завершают обработку политики.**
+
+Именно тут вступают в игру next term и next policy.
+
+next term — продолжить обработку со следующего term внутри этой же policy
+
+Это значит:
+«Маршрут подошел под from, я сделал что-то в then, но НЕ завершаю политику, а перехожу к следующему терму».
+
+Живой пример:
+
+term T1:
+ from prefix-list BAD
+ then reject
+ (next term тут отсутствует, так что reject = стоп)
+
+term T2:
+ from protocol bgp
+ then local-preference 200
+ next term
+
+term T3:
+ from neighbor 10.0.0.1
+ then community add 65000:300
+
+Разбор:
+
+* Маршрут BGP подошёл под T2
+* Его local-pref изменили
+* next term сказал: «не останавливаемся»
+* Процес проходит дальше в T3
+* Там добавляется community
+
+Если бы вместо next term был accept → T3 бы не выполнился.
+
+**Итого: next term = продолжить обработку термов этой же политики.**
+
+ next policy — передать маршрут следующей политике в цепочке
+
+Это в точности как «передать эстафету другой политике».
+
+Например:
+
+```
+import [ POL-A POL-B POL-C ];
+```
+
+Если в POL-A внутри term стоит:
+
+```
+then next policy;
+```
+
+То маршруты перескочат сразу в POL-B, минуя оставшиеся термы POL-A.
+
+Полезно, когда хочешь:
+
+* разбивать логику на аккуратные блоки
+* делать “пакетные” проверки
+* упрощать сложные политики
+* разделять функции BGP-политик (например: фильтрация отдельно, атрибуты отдельно)
+
+**Итого: next policy = уход из текущей policy в следующую по списку.**
+
+Accept и Reject — всегда финал
+
+Если в term есть:
+
+* accept
+* reject
+
+Обработка останавливается полностью:
+
+* больше термы этой policy не проверяются
+* следующая policy тоже не вызывается
+
+Всё. Маршрут принят или отброшен.
+
+Сводка в двух словах
+
+• next term
+ Работает внутри одной policy.
+ Позволяет применить несколько термов подряд.
+
+• next policy
+ Заканчивает обработку текущей policy, начинает следующую.
+
+• accept / reject
+ Жёсткий стоп. Полный финал.
+
+
+### Применение политики маршрутизации
+
+• Поведение политики зависит от точки ее применения:
+– Политики, примененные к верхним уровням иерархии, распространяются и на нижние уровни иерархии
+
+Таблица:
+
+Протокол    | Применение политики
+BGP         | политика маршрутизации может быть применена на уровнях протокола, группы или конкретного соседа
+OSPF, IS-IS | политика маршрутизации может быть применена только на уровне протокола
+RIP, RIPng  | политика маршрутизации может быть применена на уровнях протокола и соседа
+
+***Использование политики маршрутизации***
+
+• Настройка политики для экспорта маршрута по умолчанию в OSPF
+
+[edit]
+admin@NetEdu# show policy-options
+policy-statement NetEdu-policy {
+term Default_to_OSPF {
+from {
+protocol static;
+route-filter 0.0.0.0/0 exact;
+}
+then accept;
+}
+}
+
+[edit]
+admin@NetEdu# show protocols ospf
+export NetEdu-policy;
+area 0.0.0.0 {
+interface ge-0/0/1;
+interface lo0.0 {
+passive;
+}
+}
+
+
+*Почему default route нужно экспортировать через политику и почему просто «export default» не работает в OSPF*
+
+Почему нельзя просто включить OSPF и ожидать, что он сам раздаст default route
+
+OSPF — это протокол *link-state* со своим строгим правилом:
+он **не распространяет маршруты из RIB**, кроме:
+
+* маршрутов, которые он сам вычислил по SPF
+* маршрутов, которые мы **явно** сказали экспортировать через политику
+
+То есть, если у тебя в таблице маршрутизации есть статический маршрут:
+
+```
+0.0.0.0/0 → 192.168.1.1
+```
+
+OSPF *не будет* его раздавать соседям автоматически.
+
+Потому что:
+
+* OSPF распространяет **LSA**, а не «готовые маршруты»
+* LSA формируются по своей логике, и туда не включаются внешние маршруты, если явно не сказать «надо»
+
+Вот поэтому нужен policy-statement.
+
+Почему default route нужно экспортировать через policy
+Потому что в JunOS экспорт в OSPF работает ТОЛЬКО по правилам:
+```
+protocols ospf {
+    export <policy-name>;
+}
+```
+А внутри <policy-name> тебе нужно выбрать, какие маршруты можно отдавать наружу.
+
+В данном примере это:
+
+```
+from {
+    protocol static;
+    route-filter 0.0.0.0/0 exact;
+}
+```
+
+То есть политика говорит:
+
+* выбираем только статические маршруты (из таблицы static)
+* среди них допускаем только точный 0.0.0.0/0
+* если маршрут подошёл — then accept
+
+ *Почему это важно*
+
+Без этой политики default route не уйдёт в OSPF вообще.
+Соседи будут видеть все твои подсети, но не увидят «выход в интернет».
+
+Это классическая ошибка новичков:
+
+* «OSPF подняли, соседи есть, а default не приходит».
+* «Почему default не распространяется?»
+
+Ответ всегда один:
+
+*OSPF не экспортирует маршруты, если ты не сказал ему это сделать через policy.*
+ ***Почему нельзя просто написать что-то вроде "redistribute static"***
+
+В Cisco — да, там такое есть.
+В JunOS — нет.
+Juniper придерживается строгой философии:
+«Ничего не экспортируем без явного разрешения через политики».
+Это делает поведение более предсказуемым и защищает от случайных утечек маршрутов.
+
+ ***Коротко, как работает экспорт default в OSPF***
+
+1. Создаёшь статический default-route.
+2. Создаёшь policy-statement, который его матчит.
+3. В OSPF делаешь `export <policy-name>`.
+
+После этого все соседи увидят твой default как LSA Type 5 или Type 7 (зависит от зоны).
+
+### Структура firewall-фильтра
+
+NetEdu-filter
+
+term T1
+ From → Then (match)
+ no match
+
+term T2
+ From → Then (match)
+ no match
+
+term Default
+ Discard
+
+Подписи:
+
+• NetEdu-filter и T1 задаваемые пользователем имена фильтра и элементов фильтра
+• From задает критерии для совпадения
+• Then описывает действия над пакетами при совпадении
+• Discard действие по умолчанию для пакетов, не совпавших с критериями элементов фильтра
+
+
+### Критерии фильтрации пакетов
+
+• Большинство полей заголовков пакета возможно использовать в качестве критерия для фильтрации
+
+Фрагмент CLI:
+
+[edit]
+admin@NetEdu# set firewall filter NetEdu-filter term T1 from ?
+
+Possible completions:
+address — Match IP source or destination address
+apply-groups — Groups from which to inherit configuration data
+apply-groups-except — Don't inherit configuration data from these groups
+destination-address — Match IP destination address
+destination-port — Match TCP/UDP destination port
+destination-port-except — Do not match TCP/UDP destination port
+destination-prefix-list — Match IP destination prefixes in named list
+dscp — Match Differentiated Services (DiffServ) code point
+dscp-except — Do not match Differentiated Services (DiffServ) code point
+esp-spi — Match IPSec ESP SPI value
+esp-spi-except — Do not match IPSec ESP SPI value
+first-fragment — Match if packet is the first fragment
+forwarding-class — Match forwarding class
+forwarding-class-except — Do not match forwarding class
+fragment-flags — Match fragment flags (in symbolic or hex formats) (Ingress only)
+fragment-offset — Match fragment offset
+fragment-offset-except — Do not match fragment offset
+icmp-code — Match ICMP message code
+icmp-code-except — Do not match ICMP message code
+icmp-type — Match ICMP message type
+icmp-type-except — Do not match ICMP message type
+interface — Match interface name
+interface-group — Match interface group
+interface-group-except — Do not match interface group
+interface-set — Match interface in set
+ip-options — Match IP options
+ip-options-except — Do not match IP options
+is-fragment — Match if packet is a fragment
+packet-length — Match packet length
+packet-length-except — Do not match packet length
+port — Match TCP/UDP source or destination port
+port-except — Do not match TCP/UDP source or destination port
+precedence — Match IP precedence value
+precedence-except — Do not match IP precedence value
+prefix-list — Match IP source or destination prefixes in named list
+protocol — Match IP protocol type
+protocol-except — Do not match IP protocol type
+service-filter-hit — Match if service-filter-hit is set
+source-address — Match IP source address
+source-port — Match TCP/UDP source port
+source-port-except — Do not match TCP/UDP source port
+source-prefix-list — Match IP source prefixes in named list
+tcp-established — Match packet of an established TCP connection
+tcp-flags — Match TCP flags (in symbolic or hex formats)
+tcp-initial — Match initial packet of a TCP connection
+
+
+В JunOS firewall-фильтрах критериев много, но в реальной жизни используют далеко не всё. 
+
+ ***Часто используемые, прям рабочие лошадки***
+
+Эти критерии встречаются буквально в каждом втором фильтре:
+
+**source-address / destination-address**
+Матч по IP источника и назначения.
+Базовый инструмент для ACL любого уровня.
+
+**source-port / destination-port / port**
+Матч по TCP/UDP портам.
+Используется для ограничения сервисов: SSH, HTTPS, DNS, GRE, RDP.
+
+**protocol**
+IP протокол: tcp, udp, icmp, gre, ospf, esp…
+Очень частая штука.
+
+**prefix-list / destination-prefix-list / source-prefix-list**
+Позволяет использовать именованные списки префиксов.
+Нужны, когда у тебя фильтр должен работать с большими наборами подсетей.
+
+**tcp-established / tcp-flags**
+Используется в stateful-like сценариях («отпускаем только established»).
+
+**interface / interface-set**
+Когда фильтр применяют глобально, но нужно матчить конкретный интерфейс/группу.
+
+**dscp / precedence**
+Встречается в QoS, особенно у провайдеров.
+
+---
+
+***Среднечастые: нужны, но не каждый день***
+
+**icmp-type / icmp-code**
+Если занимаешься безопасностью, мониторингом или занимаешься BFD/PMTU — пригодится.
+
+**first-fragment / is-fragment / fragment-offset**
+Встречается, когда нужно фильтровать «фрагментированные пакеты» (DOS mitigation).
+
+**service-filter-hit**
+Используется в сочетании с AppQoS/Service filters.
+Реже, но полезно.
+
+---
+
+***Редкие, но полезные в особых случаях***
+
+**ip-options**
+Чаще всего для блокировки нестандартных IP options.
+В продакшене почти не используют.
+
+**apply-groups / apply-groups-except**
+Часть механизма шаблонов конфигурации, не про фильтры.
+Нужны в больших сетях, но к фильтрации имеют косвенное отношение.
+
+**packet-length / packet-length-except**
+Иногда в DDoS-защите (например, UDP-flood mitigation).
+
+**source-address-except / port-except**
+Встречается редко, заменяется инверсией логики в фильтре.
+
+---
+
+***Живые примеры, чтобы стало понятнее***
+
+ 1. Типичная защита loopback интерфейса на роутере
+
+```
+term allow-bgp {
+    from {
+        protocol tcp;
+        destination-port 179;
+        source-prefix-list BGP-PEERS;
+    }
+    then accept;
+}
+
+term allow-icmp {
+    from {
+        protocol icmp;
+        icmp-type echo-request;
+    }
+    then accept;
+}
+
+term block-rest {
+    then discard;
+}
+```
+
+Что использовано: ports, protocol, prefix-list, icmp-type.
+
+---
+
+ 2. Пропуск только established TCP трафика
+
+```
+from {
+    protocol tcp;
+    tcp-established;
+}
+```
+
+---
+
+ 3. Фильтрация по длине пакета (DDoS mitigation)
+
+```
+from {
+    packet-length 0-200;
+    protocol udp;
+}
+```
+
+---
+
+ Почти не используется (но знать стоит)
+
+**esp-spi / esp-spi-except**
+Матч по IPSec SPI.
+Обычно применяется только в специфичных VPN-фильтрах.
+
+**fragment-flags**
+Слишком низкоуровневая штука, редко нужна.
+
+**precedence-except / dscp-except**
+Проще создать нормальный term, чем использовать except-формы.
+
+---
+
+Короткая сводка:
+
+Если ты настраиваешь обычную сетевую безопасность или фильтры на интерфейсах, то в 90 процентах случаев ты будешь использовать:
+
+* адреса
+* порты
+* протокол
+* prefix-list
+* tcp-flags / tcp-established
+* icmp-type
+
+Остальное — редкие и специализированные случаи.
+
+### Основные действия над пакетами
+
+• Основные действия фильтра над пакетами:
+
+– Терминирующие
+• Accept — разрешает прохождение пакета
+• Discard — сбрасывает пакет и не отправляет ICMP-Unreachable
+• Reject — сбрасывает пакет и отправляет ICMP-Unreachable
+
+– Контроль выполнения firewall фильтра
+• Next term
+
+– Модификаторы
+• Log, syslog count — для записи информации о пакете
+• Forwarding-class и loss-priority — для указания информации CoS
+• Policer
+
+• Если в элементе фильтра указан только модификатор, но не указано терминирующее действие — неявно подразумевается Accept
+
+
+### Настройка firewall-фильтра
+
+• Firewall-фильтры настраиваются на уровне иерархии [edit firewall]
+
+admin@NetEdu> show configuration firewall
+family inet {
+filter NetEdu-filter {
+term VK_discard {
+from {
+destination-prefix-list {
+VK.com;
+}
+protocol tcp;
+destination-port https;
+}
+then {
+count VK_discard;
+discard;
+}
+}
+term Accept_other {
+then accept;
+}
+}
+}
+
+
+***Фильтрация трафика на интерфейсе***
+
+• Firewall-фильтр может применен на интерфейсе для двух направлений:
+– Input — для входящего трафика
+– Output — для исходящего трафика
+
+Пример конфигурации:
+
+admin@NetEdu> show configuration interfaces ge-0/0/2
+unit 0 {
+family inet {
+filter {
+input filter-in;
+output filter-out;
+}
+address 192.168.33.62/30;
+}
+}
+
+• Для применения нескольких фильтров в одном направлении можно использовать опции input-list или output-list.
+
+### Policing
+
+• Firewall-фильтры могут ограничивать полосу пропускания
+– Отбор трафика для полисинга осуществляется по тем же критериям
+– Фильтр сбрасывает пакеты, которым не хватило полосы
+
+• Настраиваются два параметра для ограничения полосы:
+– Bandwidth-limit — среднее разрешенное число бит в секунду
+– Burst-size-limit — определяет количество байт, на которое система позволит превысить заданное ограничение при всплеске трафика
+
+• Разумный метод для определения burst-size — умножение скорости интерфейса на допустимое время "всплеска"
+– Во время "всплеска" фильтр не сбрасывает пакеты
+– Разумно не сбрасывать одиночные пакеты и пакеты в коротких сессиях
+
+***Алгоритм полисинга***
+
+• Пакет проверяется на критерии фильтрации
+
+• Фильтр проверяет, хватает ли пакету полосы пропускания
+– Если да — пакет обрабатывается нормально
+– Если нет — фильтр применяет к пакету действие, указанное в настройках
+
+• Применяются остальные действия firewall-фильтра
+
+*Настройка policing*
+
+• Policer настраивается на уровне иерархии [edit firewall policer]
+
+admin@NetEdu> show configuration firewall
+family inet {
+filter Limit_some_traffic {
+term UDP {
+from {
+protocol udp;
+}
+then {
+policer Net_policer;
+accept;
+}
+}
+}
+}
+
+policer Net_policer {
+if-exceeding {
+bandwidth-limit 30m;
+burst-size-limit 100k;
+}
+then discard;
+}
+
+### Unicast RPF
+
+• Unicast Reverse Path Forwarding контролирует достоверность полученных пакетов на интерфейсе
+
+• Варианты проверки uRPF:
+– Loose — проверка адреса источника пакета проводится только на наличие специфичного маршрута в таблице маршрутизации
+– Strict — проверка на соответствие таблице маршрутизации производится как для адреса источника пакета, так и для входящего интерфейса
+
+• По умолчанию система использует strict режим
+– Система ожидает получить трафик на интерфейсе, если в таблице маршрутизации до адреса источника пакета есть активный маршрут с next-hop, указывающим на этот интерфейс
+
+***Настройка uRPF***
+
+• По умолчанию пакет сбрасывается, если не проходит RPF проверку
+
+• Можно освободить трафик от проверки RPF с помощью fail-filter
+– Трафик будет обрабатываться фильтром, не проходя RPF проверку
+
+Пример конфигурации:
+
+admin@NetEdu> show configuration interfaces ge-0/0/2
+unit 0 {
+family inet {
+rpf-check fail-filter rpf_Check;
+address 192.168.33.61/30;
+}
+}
+
+
+
 
 
 
